@@ -81,6 +81,7 @@ import {
   Sun,
   Moon,
   Globe,
+  ArrowRight,
 } from 'lucide-react';
 
 /**
@@ -1213,114 +1214,202 @@ export default function App() {
             </button>
           </div>
 
-          {/* Zone 2: Schematic Formula Development Route in Top Menu */}
+          {/* Zone 2: Schematic Formula Development Route in Top Menu (Clear Mobile Flow + Graphical Guidance Arrows) */}
           <nav
             data-testid="formula-development-route"
-            className="order-3 w-full 2xl:order-2 2xl:w-auto flex flex-wrap items-center gap-x-2 gap-y-1.5 pt-2.5 mt-1 border-t border-slate-800/60 2xl:pt-0 2xl:mt-0 2xl:border-t-0 text-xs font-normal min-w-0"
+            className="order-3 w-full 2xl:order-2 2xl:w-auto flex flex-col sm:flex-row sm:flex-wrap items-start sm:items-center gap-x-1.5 gap-y-1.5 pt-2.5 mt-1 border-t border-slate-800/60 2xl:pt-0 2xl:mt-0 2xl:border-t-0 text-xs font-normal min-w-0"
             aria-label="Schematic Route of Developing a Formula"
           >
-            <span className="hidden xl:inline-flex items-center gap-1 text-[11px] font-mono uppercase tracking-wider text-emerald-400 font-normal mr-1.5">
-              Formula Route:
-            </span>
-            {[
-              {
-                step: '1',
-                id: 'raw-materials' as NavSectionId,
-                label: lang === 'fa' ? '۱. مواد اولیه' : '1. Palette',
-                sub: 'Materials',
-                icon: Database,
-              },
-              {
-                step: '2',
-                id: 'accords' as NavSectionId,
-                label: lang === 'fa' ? '۲. آکوردها' : '2. Accords',
-                sub: 'Bases',
-                icon: Layers,
-              },
-              {
-                step: '3',
-                id: 'olfactory-wheel' as NavSectionId,
-                label: lang === 'fa' ? '۳. چرخه بویایی' : '3. Wheel',
-                sub: 'Families',
-                icon: Compass,
-              },
-              {
-                step: '4',
-                id: 'scent-hierarchy' as NavSectionId,
-                label: lang === 'fa' ? '۴. هرم بویایی' : '4. Pyramid',
-                sub: 'Volatility',
-                icon: OlfactoryPyramidIcon,
-              },
-              {
-                step: '5',
-                id: 'formula-lab' as NavSectionId,
-                label: lang === 'fa' ? '۵. آزمایشگاه فرمول' : '5. Formula Lab',
-                sub: 'Compose',
-                icon: FlaskConical,
-              },
-              {
-                step: '6',
-                id: 'evaluations' as NavSectionId,
-                label: lang === 'fa' ? '۶. ارزیابی و مربی' : '6. Evaluate',
-                sub: 'Blotter',
-                icon: ClipboardCheck,
-              },
-            ].map((routeStep, idx, arr) => {
-              const StepIcon = routeStep.icon;
-              const isStepActive =
-                activeNav === routeStep.id ||
-                (routeStep.id === 'evaluations' && activeNav === 'mentor') ||
-                (routeStep.id === 'formula-lab' && activeNav === 'formula-library');
-              return (
-                <React.Fragment key={routeStep.id}>
-                  <button
-                    type="button"
-                    data-testid={`route-step-${routeStep.id}`}
-                    onClick={() => setActiveNav(routeStep.id)}
-                    className={`px-3 py-1 rounded-md text-xs transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 border ${
-                      isStepActive
-                        ? 'bg-emerald-600 text-white border-emerald-500 font-medium'
-                        : 'bg-[#111621] text-slate-300 border-slate-800/80 font-normal hover:border-slate-700 hover:text-white'
-                    }`}
-                  >
-                    <StepIcon
-                      className={`w-3.5 h-3.5 shrink-0 ${
-                        isStepActive ? 'text-white' : 'text-emerald-400'
-                      }`}
-                    />
-                    <span>{routeStep.label}</span>
-                  </button>
-                  {idx < arr.length - 1 && (
-                    <ChevronRight
-                      className="w-3.5 h-3.5 text-slate-500 shrink-0 hidden sm:inline"
-                      aria-hidden="true"
-                    />
-                  )}
-                </React.Fragment>
+            {(() => {
+              const routeSteps = [
+                {
+                  step: '1',
+                  id: 'raw-materials' as NavSectionId,
+                  label: lang === 'fa' ? '۱. مواد اولیه' : '1. Palette',
+                  sub: 'Materials',
+                  icon: Database,
+                },
+                {
+                  step: '2',
+                  id: 'accords' as NavSectionId,
+                  label: lang === 'fa' ? '۲. آکوردها' : '2. Accords',
+                  sub: 'Bases',
+                  icon: Layers,
+                },
+                {
+                  step: '3',
+                  id: 'olfactory-wheel' as NavSectionId,
+                  label: lang === 'fa' ? '۳. چرخه بویایی' : '3. Wheel',
+                  sub: 'Families',
+                  icon: Compass,
+                },
+                {
+                  step: '4',
+                  id: 'scent-hierarchy' as NavSectionId,
+                  label: lang === 'fa' ? '۴. هرم بویایی' : '4. Pyramid',
+                  sub: 'Volatility',
+                  icon: OlfactoryPyramidIcon,
+                },
+                {
+                  step: '5',
+                  id: 'formula-lab' as NavSectionId,
+                  label: lang === 'fa' ? '۵. آزمایشگاه فرمول' : '5. Formula Lab',
+                  sub: 'Compose',
+                  icon: FlaskConical,
+                },
+                {
+                  step: '6',
+                  id: 'evaluations' as NavSectionId,
+                  label: lang === 'fa' ? '۶. ارزیابی و مربی' : '6. Evaluate',
+                  sub: 'Blotter',
+                  icon: ClipboardCheck,
+                },
+              ];
+              const activeRouteIdx = routeSteps.findIndex(
+                (rs) =>
+                  activeNav === rs.id ||
+                  (rs.id === 'evaluations' && activeNav === 'mentor') ||
+                  (rs.id === 'formula-lab' && activeNav === 'formula-library')
               );
-            })}
+              const activeRouteStep = activeRouteIdx >= 0 ? routeSteps[activeRouteIdx] : null;
+              const nextRouteStep =
+                activeRouteIdx >= 0 && activeRouteIdx < routeSteps.length - 1
+                  ? routeSteps[activeRouteIdx + 1]
+                  : null;
 
-            {/* Olfactory Mentor placed directly next to the last menu (6. Evaluate) */}
-            <div className="flex items-center gap-1.5 ml-1 pl-2 border-l border-slate-800">
-              <button
-                type="button"
-                data-testid="header-mentor-btn"
-                onClick={() => setActiveNav('mentor')}
-                className={`px-3 py-1 rounded-md text-xs transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 border ${
-                  activeNav === 'mentor'
-                    ? 'bg-amber-500/20 text-amber-300 border-amber-500/50 font-medium'
-                    : 'bg-[#111621] text-slate-300 border-slate-800/80 hover:border-slate-700 hover:text-white font-normal'
-                }`}
-              >
-                <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                <span>{t('mentor', lang)}</span>
-              </button>
-            </div>
+              return (
+                <>
+                  {/* Mobile Route Flow Header: Shows Current Step & Next Step Direction Clearly */}
+                  <div className="flex sm:hidden items-center justify-between w-full px-0.5 text-[11px] font-mono-tabular">
+                    <span className="inline-flex items-center gap-1.5 text-emerald-400 font-semibold">
+                      <Compass className="w-3 h-3 shrink-0" />
+                      <span>
+                        {activeRouteStep
+                          ? `Route Step ${activeRouteStep.step}/6: ${activeRouteStep.label.replace(/^[0-9۱-۶]+\.\s*/, '')}`
+                          : 'Formula Route (6 Steps)'}
+                      </span>
+                    </span>
+                    {nextRouteStep ? (
+                      <button
+                        type="button"
+                        onClick={() => setActiveNav(nextRouteStep.id)}
+                        className="inline-flex items-center gap-1 text-slate-300 hover:text-white bg-slate-800/80 px-2 py-0.5 rounded border border-slate-700/80"
+                      >
+                        <span>Next: {nextRouteStep.label}</span>
+                        <ArrowRight className="w-3 h-3 text-emerald-400 shrink-0" />
+                      </button>
+                    ) : (
+                      <span className="text-slate-400 inline-flex items-center gap-1">
+                        <span>Swipe Flow</span>
+                        <ArrowRight className="w-3 h-3 text-emerald-400" />
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Horizontally Scrollable Step Chain with Visible Graphical Guidance Arrows on Mobile & Desktop */}
+                  <div className="w-full 2xl:w-auto flex items-center gap-1.5 overflow-x-auto sm:overflow-visible sm:flex-wrap pb-1 sm:pb-0 no-scrollbar">
+                    <span className="hidden xl:inline-flex items-center gap-1 text-[11px] font-mono uppercase tracking-wider text-emerald-400 font-semibold mr-1">
+                      Formula Route:
+                    </span>
+                    {routeSteps.map((routeStep, idx, arr) => {
+                      const StepIcon = routeStep.icon;
+                      const isStepActive =
+                        activeNav === routeStep.id ||
+                        (routeStep.id === 'evaluations' && activeNav === 'mentor') ||
+                        (routeStep.id === 'formula-lab' && activeNav === 'formula-library');
+                      const isCompleted = activeRouteIdx > idx;
+
+                      return (
+                        <React.Fragment key={routeStep.id}>
+                          <button
+                            type="button"
+                            data-testid={`route-step-${routeStep.id}`}
+                            onClick={() => setActiveNav(routeStep.id)}
+                            className={`px-2.5 sm:px-3 py-1.5 sm:py-1 rounded-md text-xs transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 border ${
+                              isStepActive
+                                ? 'bg-emerald-600 text-white border-emerald-500 font-semibold shadow-xs ring-2 ring-emerald-500/30'
+                                : isCompleted
+                                ? 'bg-emerald-950/30 text-emerald-300 border-emerald-700/50 font-medium hover:border-emerald-500'
+                                : 'bg-[#111621] text-slate-300 border-slate-800/80 font-normal hover:border-slate-700 hover:text-white'
+                            }`}
+                          >
+                            <StepIcon
+                              className={`w-3.5 h-3.5 shrink-0 ${
+                                isStepActive ? 'text-white' : 'text-emerald-400'
+                              }`}
+                            />
+                            <span>{routeStep.label}</span>
+                          </button>
+
+                          {idx < arr.length - 1 && (
+                            <span
+                              data-testid={`route-arrow-${idx + 1}`}
+                              className={`inline-flex items-center justify-center shrink-0 px-0.5 ${
+                                isStepActive
+                                  ? 'text-emerald-400 scale-110'
+                                  : isCompleted
+                                  ? 'text-emerald-400/80'
+                                  : 'text-slate-400'
+                              }`}
+                              aria-hidden="true"
+                              title={`Proceed from ${routeStep.label} to ${arr[idx + 1].label}`}
+                            >
+                              <svg
+                                viewBox="0 0 22 12"
+                                className="w-5 h-3 shrink-0"
+                                fill="none"
+                                xmlns="http://www.w3.org/2000/svg"
+                              >
+                                <path
+                                  d="M1 6H19M19 6L14 1.5M19 6L14 10.5"
+                                  stroke="currentColor"
+                                  strokeWidth="2"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                />
+                              </svg>
+                            </span>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
+
+                    {/* Olfactory Mentor placed directly next to the last menu (6. Evaluate) */}
+                    <div className="flex items-center gap-1.5 ml-1 pl-2 border-l border-slate-800 shrink-0">
+                      <button
+                        type="button"
+                        data-testid="header-mentor-btn"
+                        onClick={() => setActiveNav('mentor')}
+                        className={`px-3 py-1.5 sm:py-1 rounded-md text-xs transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 border ${
+                          activeNav === 'mentor'
+                            ? 'bg-amber-600 text-white border-amber-500 font-semibold'
+                            : 'bg-[#111621] text-slate-300 border-slate-800/80 hover:border-slate-700 hover:text-white font-normal'
+                        }`}
+                      >
+                        <Sparkles
+                          className={`w-3.5 h-3.5 shrink-0 ${
+                            activeNav === 'mentor' ? 'text-white' : 'text-amber-400'
+                          }`}
+                        />
+                        <span>{t('mentor', lang)}</span>
+                      </button>
+                    </div>
+                  </div>
+                </>
+              );
+            })()}
           </nav>
         </header>
 
-        {/* Main Workspace Stage */}
-        <main className="flex-1 p-5 sm:p-8 lg:px-10 max-w-[1440px] w-full mx-auto min-w-0 space-y-7">
+        {/* Main Workspace Stage — Clicking/tapping outside the sidebar closes expanded menus */}
+        <main
+          onClick={() => {
+            if (!sidebarCollapsed) setSidebarCollapsed(true);
+            if (mobileMenuOpen) setMobileMenuOpen(false);
+            if (themePickerOpen) setThemePickerOpen(false);
+          }}
+          className="flex-1 p-5 sm:p-8 lg:px-10 max-w-[1440px] w-full mx-auto min-w-0 space-y-7"
+        >
           {/* Concise Per-Tab Instruction & Purpose Banner */}
           {TAB_INSTRUCTION_GUIDE[activeNav] && (
             <div
@@ -1966,6 +2055,7 @@ export default function App() {
                   )
                 );
               }}
+              onUpdateFormulaItems={handleUpdateFormulaLineItems}
               onSelectMaterial={(id) => {
                 setSelectedMaterialId(id);
                 setActiveNav('raw-materials');
@@ -2015,7 +2105,15 @@ export default function App() {
               materials={materials}
               inventoryLots={inventoryLots}
               evaluations={evaluations}
+              accords={accords}
               authHeaders={getAuthHeaders()}
+              onUpdateFormulaItems={handleUpdateFormulaLineItems}
+              onNavigateToWheel={() => setActiveNav('olfactory-wheel')}
+              onInspectMaterial={(id) => {
+                setSelectedMaterialId(id);
+                setActiveNav('raw-materials');
+              }}
+              onOpenFormulaLab={() => setActiveNav('formula-lab')}
               onCreateExperimentalBranch={async (
                 branchLabel,
                 branchNotes,
@@ -2125,14 +2223,19 @@ export default function App() {
         )}
       </div>
 
-      {/* Mobile Navigation Drawer */}
+      {/* Mobile Navigation Drawer — Clicking/tapping outside the sidebar closes the menu */}
       {mobileMenuOpen && (
         <div
-          className="fixed inset-0 z-50 lg:hidden flex bg-black/75"
+          data-testid="mobile-sidebar-backdrop"
+          onClick={() => setMobileMenuOpen(false)}
+          className="fixed inset-0 z-50 lg:hidden flex bg-black/75 backdrop-blur-xs"
           role="dialog"
           aria-modal="true"
         >
-          <div className="w-64 bg-[#0E121B] border-r border-slate-800 p-4 flex flex-col justify-between overflow-y-auto">
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-64 bg-[#0E121B] border-r border-slate-800 p-4 flex flex-col justify-between overflow-y-auto shadow-2xl"
+          >
             <div className="space-y-4">
               <div className="flex items-center justify-between border-b border-slate-800 pb-3">
                 <span className="text-lg font-sans font-bold text-white">
@@ -2179,12 +2282,16 @@ export default function App() {
       {/* Command Palette Modal (Cmd/Ctrl + K) */}
       {commandPaletteOpen && (
         <div
+          onClick={() => setCommandPaletteOpen(false)}
           className="fixed inset-0 z-50 flex items-start justify-center bg-black/75 pt-20 p-4"
           role="dialog"
           aria-modal="true"
           aria-label="Global Command Palette"
         >
-          <div className="w-full max-w-xl rounded-lg bg-[#111621] border border-slate-700 shadow-2xl overflow-hidden">
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-xl rounded-lg bg-[#111621] border border-slate-700 shadow-2xl overflow-hidden"
+          >
             <div className="flex items-center px-4 py-3 border-b border-slate-800">
               <Search className="w-4 h-4 text-emerald-400 mr-3 shrink-0" />
               <input

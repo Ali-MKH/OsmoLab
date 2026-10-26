@@ -2,13 +2,24 @@ import React, { useState, useMemo } from 'react';
 import {
   AccordDefinition,
   Formula,
+  FormulaLineItem,
   MacroFamily,
   OlfactoryFamilyDef,
   RawMaterial,
   SensoryEvaluation,
 } from '../domain/types';
 import { OLFACTORY_WHEEL_FAMILIES } from '../domain/seed-data';
-import { Plus, Layers, Compass, ArrowRight, Radar } from 'lucide-react';
+import {
+  Plus,
+  Layers,
+  Compass,
+  ArrowRight,
+  Radar,
+  Sparkles,
+  CheckCircle2,
+  TrendingUp,
+  TrendingDown,
+} from 'lucide-react';
 import { motion } from 'framer-motion';
 
 interface OlfactoryWheelViewProps {
@@ -19,6 +30,7 @@ interface OlfactoryWheelViewProps {
   accords: AccordDefinition[];
   evaluations: SensoryEvaluation[];
   onUpdateTargetFacets: (formulaId: number, updatedFacets: Record<string, number>) => void;
+  onUpdateFormulaItems?: (newItems: FormulaLineItem[]) => void;
   onSelectMaterial: (materialId: number) => void;
   onSelectFormula: (formulaId: number) => void;
 }
@@ -123,6 +135,7 @@ export const OlfactoryWheelView: React.FC<OlfactoryWheelViewProps> = ({
   accords,
   evaluations,
   onUpdateTargetFacets,
+  onUpdateFormulaItems,
   onSelectMaterial,
   onSelectFormula,
 }) => {
@@ -134,6 +147,7 @@ export const OlfactoryWheelView: React.FC<OlfactoryWheelViewProps> = ({
   const [macroFilter, setMacroFilter] = useState<'All' | MacroFamily>('All');
   const [showRadarOverlay, setShowRadarOverlay] = useState<boolean>(true);
   const [editProfileMode, setEditProfileMode] = useState<'target' | 'result'>('target');
+  const [suggestionFeedback, setSuggestionFeedback] = useState<string | null>(null);
 
   const latestEval = evaluations.find((e) => e.formulaId === activeFormula.id) || evaluations[0];
   const [localResultFacets, setLocalResultFacets] = useState<Record<string, number>>(
@@ -290,6 +304,192 @@ export const OlfactoryWheelView: React.FC<OlfactoryWheelViewProps> = ({
     });
     return map;
   }, [activeFormula, materials]);
+
+  // Apply a suggested database material (or adjust an existing material) directly to the active formula
+  const handleApplySuggestionToFormula = (
+    material: RawMaterial,
+    recommendedPctDelta: number,
+    familyName: string
+  ) => {
+    const currentVersion =
+      activeFormula.versions.find(
+        (v) => v.versionLabel === activeFormula.activeVersionLabel
+      ) || activeFormula.versions[0];
+    if (!currentVersion) return;
+
+    const existingItems = [...currentVersion.items];
+    const totalCurrentGrams =
+      existingItems.reduce((sum, it) => sum + it.quantityGrams, 0) || 100;
+    const deltaGrams = Number(
+      Math.max(0.2, (Math.abs(recommendedPctDelta) / 100) * totalCurrentGrams).toFixed(2)
+    );
+
+    const existingIdx = existingItems.findIndex((it) => it.materialId === material.id);
+    let updatedRawItems: FormulaLineItem[];
+
+    if (existingIdx >= 0) {
+      updatedRawItems = existingItems.map((it, idx) => {
+        if (idx !== existingIdx) return it;
+        const nextGrams =
+          recommendedPctDelta >= 0
+            ? Number((it.quantityGrams + deltaGrams).toFixed(2))
+            : Math.max(0.1, Number((it.quantityGrams - deltaGrams).toFixed(2)));
+        return {
+          ...it,
+          quantityGrams: nextGrams,
+          activeMaterialPercent: nextGrams * (it.dilutionPercent / 100),
+          notes: `Adjusted via Olfactory Wheel Advisor (${familyName})`,
+        };
+      });
+    } else {
+      const newLine: FormulaLineItem = {
+        id: `wheel-sug-${Date.now()}-${material.id}`,
+        type: 'material',
+        materialId: material.id,
+        name: material.name,
+        quantityGrams: deltaGrams,
+        percentage: Math.abs(recommendedPctDelta),
+        dilutionPercent: 100,
+        solvent: 'Neat',
+        activeMaterialPercent: deltaGrams,
+        supplier: material.supplier || 'Atelier Stock',
+        lotNumber: `LOT-${material.id}-WHL`,
+        costPerGram: 0.38,
+        notes: `Suggested for ${familyName} target alignment (${material.volatility} note)`,
+      };
+      updatedRawItems = [...existingItems, newLine];
+    }
+
+    const newTotalGrams = updatedRawItems.reduce((s, it) => s + it.quantityGrams, 0);
+    const normalizedItems = updatedRawItems.map((it) => ({
+      ...it,
+      percentage: newTotalGrams > 0 ? (it.quantityGrams / newTotalGrams) * 100 : 0,
+    }));
+
+    if (onUpdateFormulaItems) {
+      onUpdateFormulaItems(normalizedItems);
+    }
+
+    // Also nudge local smelled result closer to target so user sees immediate visual convergence
+    setLocalResultFacets((prev) => {
+      const cur = prev[familyName] ?? 0;
+      const tgt = targetFacets[familyName] ?? cur;
+      const step = tgt > cur ? Math.min(tgt, cur + 2) : Math.max(tgt, cur - 2);
+      return { ...prev, [familyName]: step };
+    });
+
+    setSuggestionFeedback(
+      `${recommendedPctDelta >= 0 ? 'Added' : 'Reduced'} ${material.name} (${recommendedPctDelta >= 0 ? '+' : ''}${recommendedPctDelta.toFixed(1)}% / ${deltaGrams}g) in ${activeFormula.name} (${activeFormula.activeVersionLabel}) to align ${familyName}.`
+    );
+    setTimeout(() => setSuggestionFeedback(null), 5000);
+  };
+
+  // Compute Target vs. Result Distance Diagnostics & Database Material Recommendations
+  const gapDiagnostics = useMemo(() => {
+    const currentVersion =
+      activeFormula.versions.find(
+        (v) => v.versionLabel === activeFormula.activeVersionLabel
+      ) || activeFormula.versions[0];
+    const formulaItems = currentVersion?.items || [];
+    const formulaMaterialIds = new Set(
+      formulaItems.map((i) => i.materialId).filter(Boolean)
+    );
+
+    const diagnostics = RADAR_AXES_CLOCKWISE.map((axis, idx) => {
+      const fam =
+        OLFACTORY_WHEEL_FAMILIES.find((f) => f.id === axis.id) ||
+        OLFACTORY_WHEEL_FAMILIES[idx];
+      const targetVal = getFacetScore(targetFacets, axis);
+      const resultVal = getFacetScore(localResultFacets, axis);
+      const delta = resultVal - targetVal; // negative = deficit (Result < Target), positive = excess (Result > Target)
+      const absGap = Math.abs(delta);
+      const famWeight = activeFormulaFamilyWeights[fam.id] || {
+        grams: 0,
+        pct: 0,
+        count: 0,
+      };
+      const aliases = FAMILY_MATCH_ALIASES[fam.id] || [fam.name.toLowerCase()];
+
+      // Find complementary opposite family on the 14-sector wheel (index + 7)
+      const oppositeFam =
+        OLFACTORY_WHEEL_FAMILIES[(idx + 7) % OLFACTORY_WHEEL_FAMILIES.length];
+
+      // Find database materials matching this family
+      const candidateMaterials = materials
+        .filter((m) => {
+          const pFam = m.primaryFamily.toLowerCase();
+          return (
+            aliases.includes(pFam) ||
+            m.facets.some((fac) => aliases.some((al) => fac.toLowerCase().includes(al)))
+          );
+        })
+        .sort((a, b) => {
+          // Prefer materials not yet in formula for deficits, or materials already in formula for excesses
+          const aIn = formulaMaterialIds.has(a.id) ? 1 : 0;
+          const bIn = formulaMaterialIds.has(b.id) ? 1 : 0;
+          if (delta < 0 && aIn !== bIn) return aIn - bIn;
+          if (delta > 0 && aIn !== bIn) return bIn - aIn;
+          return (b.intensity || 5) - (a.intensity || 5);
+        });
+
+      // Explain WHY there is a distance between Target Intent and Smelled Result
+      let whyDistance = '';
+      let actionStrategy = '';
+      if (delta < 0) {
+        if (famWeight.count === 0 || famWeight.pct < 1) {
+          whyDistance = `Structural Deficit (${resultVal}/10 smelled vs ${targetVal}/10 target): Your active formula currently contains ${famWeight.pct.toFixed(1)}% raw materials in the ${fam.name} family, leaving an unbridged ${absGap}-point sensory gap.`;
+          actionStrategy = `Introduce a high-impact ${fam.name} heart/top or base anchor from your database at +${Math.min(6, Math.max(1.5, absGap * 1.1)).toFixed(1)}% to build immediate ${fam.subFacets.slice(0, 2).join(' & ')} presence.`;
+        } else {
+          whyDistance = `Olfactory Masking & Volatility Suppression (${resultVal}/10 smelled vs ${targetVal}/10 target): Although ${fam.name} represents ${famWeight.pct.toFixed(1)}% (${famWeight.count} material${famWeight.count > 1 ? 's' : ''}) of the formula, heavier base/woody fixatives are dampening its perceived radiance on the blotter.`;
+          actionStrategy = `Boost diffusive ${fam.name} modifiers (+${Math.min(4.5, Math.max(1.2, absGap * 0.9)).toFixed(1)}%) with high Olfactory Power to project through the base structure.`;
+        }
+      } else if (delta > 0) {
+        whyDistance = `Headspace Over-Projection (+${delta} pts above ${targetVal}/10 target): High-impact materials in ${fam.name} (${famWeight.pct.toFixed(1)}% of batch weight) are dominating evaporation and crowding adjacent nuances.`;
+        actionStrategy = `Reduce ${fam.name} dosage by ~${Math.min(5, Math.max(1.0, delta * 1.0)).toFixed(1)}% or counterbalance with complementary ${oppositeFam.name} (${oppositeFam.macroFamily}) notes across the wheel.`;
+      } else {
+        whyDistance = `Calibrated Equilibrium (${targetVal}/10): Perceived blotter evaluation matches your target brief for ${fam.name} (${famWeight.pct.toFixed(1)}% of formula weight).`;
+        actionStrategy = `Maintain current ${fam.name} ratio or fine-tune sub-facet nuances (${fam.subFacets.slice(0, 2).join(', ')}).`;
+      }
+
+      const recommendedPctDelta =
+        delta < 0
+          ? Number(Math.min(5.5, Math.max(1.5, absGap * 1.1)).toFixed(1))
+          : delta > 0
+          ? -Number(Math.min(4.5, Math.max(1.0, absGap * 0.9)).toFixed(1))
+          : 1.5;
+
+      return {
+        axis,
+        fam,
+        oppositeFam,
+        targetVal,
+        resultVal,
+        delta,
+        absGap,
+        famWeight,
+        whyDistance,
+        actionStrategy,
+        recommendedPctDelta,
+        suggestedMaterials: candidateMaterials.slice(0, 3),
+      };
+    });
+
+    // Overall alignment % across the 14 families
+    const totalMaxDiff = RADAR_AXES_CLOCKWISE.length * 10;
+    const totalActualDiff = diagnostics.reduce((s, d) => s + d.absGap, 0);
+    const alignmentScore = Math.max(
+      0,
+      Math.round(((totalMaxDiff - totalActualDiff) / totalMaxDiff) * 100)
+    );
+
+    return {
+      all: diagnostics,
+      divergent: [...diagnostics]
+        .filter((d) => d.absGap > 0)
+        .sort((a, b) => b.absGap - a.absGap),
+      alignmentScore,
+    };
+  }, [targetFacets, localResultFacets, activeFormulaFamilyWeights, materials, activeFormula]);
 
   // Michael Edwards 14-Sector Single-Ring Wheel Geometry:
   // Center Circle: rCenterHub = 228 (diameter 456px; expanded calibration hub)
@@ -714,6 +914,12 @@ export const OlfactoryWheelView: React.FC<OlfactoryWheelViewProps> = ({
                   type="button"
                   data-testid={`filter-macro-${mg.id.toLowerCase()}`}
                   onClick={() => {
+                    // Pressing again on the active macro aspect resets to All 14 Families
+                    if (macroFilter === mg.id) {
+                      setMacroFilter('All');
+                      setSelectedFamilyId(null);
+                      return;
+                    }
                     setMacroFilter(mg.id);
                     const firstFam = OLFACTORY_WHEEL_FAMILIES.find((f) => f.macroFamily === mg.id);
                     if (firstFam) {
@@ -879,6 +1085,12 @@ export const OlfactoryWheelView: React.FC<OlfactoryWheelViewProps> = ({
                   key={arc.macro}
                   data-testid={`wheel-macro-${arc.macro.toLowerCase()}`}
                   onClick={() => {
+                    // Pressing again on the selected outer aspect triggers "All 14 Families"
+                    if (macroFilter === arc.macro) {
+                      setMacroFilter('All');
+                      setSelectedFamilyId(null);
+                      return;
+                    }
                     setMacroFilter(arc.macro);
                     const firstFam = OLFACTORY_WHEEL_FAMILIES.find(
                       (f) => f.macroFamily === arc.macro
@@ -907,14 +1119,14 @@ export const OlfactoryWheelView: React.FC<OlfactoryWheelViewProps> = ({
                     d={seg1D}
                     fill="none"
                     stroke={arc.color}
-                    strokeWidth={isMacroHighlighted ? '5' : '3.5'}
+                    strokeWidth={isMacroHighlighted ? '5.5' : '3.8'}
                     strokeLinecap="round"
                   />
                   <path
                     d={seg2D}
                     fill="none"
                     stroke={arc.color}
-                    strokeWidth={isMacroHighlighted ? '5' : '3.5'}
+                    strokeWidth={isMacroHighlighted ? '5.5' : '3.8'}
                     strokeLinecap="round"
                   />
 
@@ -925,13 +1137,13 @@ export const OlfactoryWheelView: React.FC<OlfactoryWheelViewProps> = ({
                     transform={`translate(${tipX.toFixed(2)}, ${tipY.toFixed(2)}) rotate(${tangentAngleDeg.toFixed(2)})`}
                   />
 
-                  {/* Curved Aspect Title (FLORAL, AMBERY, WOODY, FRESH) in the break of the outer border */}
+                  {/* Enlarged Curved Aspect Title (FLORAL, AMBERY, WOODY, FRESH) in the break of the outer border */}
                   <text
-                    fill={strokeColor}
-                    fontSize="16"
-                    fontFamily="sans-serif"
-                    fontWeight="700"
-                    letterSpacing="0.18em"
+                    fill={arc.color}
+                    fontSize="19"
+                    fontFamily="Inter, Plus Jakarta Sans, system-ui, sans-serif"
+                    fontWeight="800"
+                    letterSpacing="0.16em"
                     className="select-none"
                   >
                     <textPath
@@ -946,13 +1158,15 @@ export const OlfactoryWheelView: React.FC<OlfactoryWheelViewProps> = ({
               );
             })}
 
-            {/* 2. SINGLE RING OF 14 EQUAL-ANGLE WEDGE SECTORS + CLEAN CURVED TITLES (ZERO INTERIOR CLUTTER) */}
+            {/* 2. SINGLE RING OF 14 EQUAL-ANGLE WEDGE SECTORS + ENLARGED CURVED TITLES */}
             {OLFACTORY_WHEEL_FAMILIES.map((fam, idx) => {
               const padDeg = 1.15;
               const startDeg = -180 + idx * sliceDeg + padDeg;
               const endDeg = -180 + (idx + 1) * sliceDeg - padDeg;
+              const midDeg = (startDeg + endDeg) / 2;
               const sRad = degToRad(startDeg);
               const eRad = degToRad(endDeg);
+              const midRad = degToRad(midDeg);
 
               const isSelected = selectedFamily ? fam.id === selectedFamily.id : false;
               const isDimmedByFilter =
@@ -976,14 +1190,22 @@ export const OlfactoryWheelView: React.FC<OlfactoryWheelViewProps> = ({
                 'Z',
               ].join(' ');
 
-              // Ensure bright, legible text color for the curved title outside the wedge
+              // Mid-sector badge coordinates for clear score/gap readability
+              const rMidWedge = (rInnerSub + rOuterCur) / 2;
+              const badgeX = cx + rMidWedge * Math.cos(midRad);
+              const badgeY = cy + rMidWedge * Math.sin(midRad);
+              const axisObj = RADAR_AXES_CLOCKWISE[idx];
+              const tVal = axisObj ? getFacetScore(targetFacets, axisObj) : 0;
+              const rVal = axisObj ? getFacetScore(localResultFacets, axisObj) : 0;
+
+              // Ensure high-contrast legible text color for the curved title outside the wedge
               const curvedTitleColor =
                 fam.id === 'amber'
                   ? '#E11D48'
                   : fam.id === 'aromatic'
-                  ? '#6366F1'
+                  ? '#4F46E5'
                   : fam.id === 'mossy-woods'
-                  ? '#10B981'
+                  ? '#059669'
                   : fam.id === 'citrus'
                   ? '#D97706'
                   : fam.color;
@@ -1001,27 +1223,33 @@ export const OlfactoryWheelView: React.FC<OlfactoryWheelViewProps> = ({
                   }}
                   style={{ transformOrigin: `${cx}px ${cy}px` }}
                   onClick={() => {
-                    setSelectedFamilyId(fam.id);
-                    setSelectedSubFacet(fam.subFacets[0] || fam.name);
+                    // Pressing again on the already-selected family sector acts as "All 14 Families"
+                    if (selectedFamilyId === fam.id) {
+                      setSelectedFamilyId(null);
+                      setMacroFilter('All');
+                    } else {
+                      setSelectedFamilyId(fam.id);
+                      setSelectedSubFacet(fam.subFacets[0] || fam.name);
+                    }
                   }}
                   className="cursor-pointer transition-all hover:opacity-95"
                 >
-                  {/* A. Rich Solid Michael Edwards Sector Wedge (Slim 76px Radial Thickness) */}
+                  {/* A. Rich Solid Michael Edwards Sector Wedge */}
                   <path
                     d={pathD}
                     fill={fam.color}
                     fillOpacity={isDimmedByFilter ? 0.28 : isSelected ? 1 : 0.92}
-                    stroke={isSelected ? '#FFFFFF' : 'rgba(255, 255, 255, 0.25)'}
-                    strokeWidth={isSelected ? '3' : '1'}
+                    stroke={isSelected ? '#FFFFFF' : 'rgba(255, 255, 255, 0.35)'}
+                    strokeWidth={isSelected ? '3.5' : '1.2'}
                   />
 
-                  {/* B. Curved Sub-Family Title Right Outside the Wedge Arc */}
+                  {/* B. Enlarged Curved Sub-Family Title Right Outside the Wedge Arc */}
                   <text
                     fill={curvedTitleColor}
-                    fontSize="15"
-                    fontFamily="sans-serif"
-                    fontWeight="700"
-                    letterSpacing="0.02em"
+                    fontSize="17.5"
+                    fontFamily="Inter, Plus Jakarta Sans, system-ui, sans-serif"
+                    fontWeight="800"
+                    letterSpacing="0.01em"
                     className="select-none"
                   >
                     <textPath
@@ -1032,6 +1260,34 @@ export const OlfactoryWheelView: React.FC<OlfactoryWheelViewProps> = ({
                       {fam.name}
                     </textPath>
                   </text>
+
+                  {/* C. Enlarged Sector Score Pill (Target vs Result) inside the Wedge */}
+                  {!isDimmedByFilter && (
+                    <g transform={`translate(${badgeX.toFixed(1)}, ${badgeY.toFixed(1)})`}>
+                      <rect
+                        x="-22"
+                        y="-11"
+                        width="44"
+                        height="22"
+                        rx="6"
+                        fill="rgba(15, 23, 42, 0.82)"
+                        stroke={isSelected ? '#FFFFFF' : 'rgba(255,255,255,0.35)'}
+                        strokeWidth={isSelected ? '1.5' : '0.8'}
+                      />
+                      <text
+                        x="0"
+                        y="1"
+                        textAnchor="middle"
+                        dominantBaseline="middle"
+                        fill="#FFFFFF"
+                        fontSize="12.5"
+                        fontFamily="JetBrains Mono, monospace"
+                        fontWeight="700"
+                      >
+                        {tVal}/{rVal}
+                      </text>
+                    </g>
+                  )}
                 </motion.g>
               );
             })}
@@ -1056,8 +1312,8 @@ export const OlfactoryWheelView: React.FC<OlfactoryWheelViewProps> = ({
                     cy={cy}
                     r={rRadarMax * step}
                     fill="none"
-                    stroke="#475569"
-                    strokeWidth="0.9"
+                    stroke="#64748B"
+                    strokeWidth="1"
                     strokeDasharray={step < 1 ? '3 3' : undefined}
                     strokeOpacity={0.75}
                   />
@@ -1067,60 +1323,82 @@ export const OlfactoryWheelView: React.FC<OlfactoryWheelViewProps> = ({
                   const rad = (ax.angleDeg * Math.PI) / 180;
                   const xEnd = cx + rRadarMax * Math.cos(rad);
                   const yEnd = cy + rRadarMax * Math.sin(rad);
+                  const labelR = rRadarMax + 24;
+                  const lx = cx + labelR * Math.cos(rad);
+                  const ly = cy + labelR * Math.sin(rad);
+                  const tScore = getFacetScore(targetFacets, ax);
+                  const rScore = getFacetScore(localResultFacets, ax);
+                  const diff = rScore - tScore;
+
                   return (
-                    <line
-                      key={ax.id}
-                      x1={cx}
-                      y1={cy}
-                      x2={xEnd}
-                      y2={yEnd}
-                      stroke="#475569"
-                      strokeWidth="1"
-                      strokeOpacity="0.75"
-                    />
+                    <g key={ax.id}>
+                      <line
+                        x1={cx}
+                        y1={cy}
+                        x2={xEnd}
+                        y2={yEnd}
+                        stroke="#64748B"
+                        strokeWidth="1"
+                        strokeOpacity="0.75"
+                      />
+                      {Math.abs(diff) >= 2 && (
+                        <text
+                          x={lx}
+                          y={ly}
+                          textAnchor="middle"
+                          dominantBaseline="middle"
+                          fill={diff > 0 ? '#FBBF24' : '#38BDF8'}
+                          fontSize="12.5"
+                          fontFamily="JetBrains Mono, monospace"
+                          fontWeight="700"
+                        >
+                          {diff > 0 ? `+${diff}` : diff}
+                        </text>
+                      )}
+                    </g>
                   );
                 })}
 
                 {/* Target Intent Polygon (Emerald) */}
                 <polygon
                   points={buildRadarPolygonClockwise(targetFacets, rRadarMax, cx, cy)}
-                  fill="rgba(16, 185, 129, 0.26)"
+                  fill="rgba(16, 185, 129, 0.28)"
                   stroke="#10B981"
-                  strokeWidth="2.5"
+                  strokeWidth="2.8"
                 />
 
                 {/* Smelled Result Polygon (Amber) */}
                 <polygon
                   points={buildRadarPolygonClockwise(localResultFacets, rRadarMax, cx, cy)}
-                  fill="rgba(245, 158, 11, 0.24)"
+                  fill="rgba(245, 158, 11, 0.25)"
                   stroke="#F59E0B"
-                  strokeWidth="2.5"
+                  strokeWidth="2.8"
                   strokeDasharray="5 3"
                 />
 
-                <circle cx={cx} cy={cy} r="4" fill="#10B981" />
+                <circle cx={cx} cy={cy} r="4.5" fill="#10B981" />
               </g>
             ) : (
-              /* LARGE MICHAEL EDWARDS STYLE CENTER HUB OVERVIEW */
+              /* LARGE MICHAEL EDWARDS STYLE CENTER HUB OVERVIEW WITH ENLARGED FONTS */
               <g className="cursor-pointer" onClick={() => setShowRadarOverlay(true)}>
                 <rect
-                  x={cx - 90}
-                  y={cy - 68}
-                  width="180"
-                  height="28"
-                  rx="14"
-                  fill="rgba(16, 185, 129, 0.16)"
+                  x={cx - 105}
+                  y={cy - 72}
+                  width="210"
+                  height="32"
+                  rx="16"
+                  fill="rgba(16, 185, 129, 0.18)"
                   stroke="#10B981"
-                  strokeWidth="1.2"
+                  strokeWidth="1.4"
                 />
                 <text
                   x={cx}
-                  y={cy - 53}
+                  y={cy - 55}
                   textAnchor="middle"
                   dominantBaseline="middle"
                   fill="#34D399"
-                  fontSize="12"
-                  fontFamily="monospace"
+                  fontSize="14"
+                  fontFamily="JetBrains Mono, monospace"
                   letterSpacing="0.12em"
                   fontWeight="700"
                 >
@@ -1129,11 +1407,11 @@ export const OlfactoryWheelView: React.FC<OlfactoryWheelViewProps> = ({
 
                 <text
                   x={cx}
-                  y={cy - 12}
+                  y={cy - 10}
                   textAnchor="middle"
                   fill="#FFFFFF"
-                  fontSize="24"
-                  fontFamily="sans-serif"
+                  fontSize="27"
+                  fontFamily="Inter, Plus Jakarta Sans, system-ui, sans-serif"
                   fontWeight="700"
                 >
                   {selectedFamily ? selectedFamily.name : 'Michael Edwards Standard'}
@@ -1141,11 +1419,11 @@ export const OlfactoryWheelView: React.FC<OlfactoryWheelViewProps> = ({
 
                 <text
                   x={cx}
-                  y={cy + 22}
+                  y={cy + 24}
                   textAnchor="middle"
                   fill="#E2E8F0"
-                  fontSize="13"
-                  fontFamily="sans-serif"
+                  fontSize="15.5"
+                  fontFamily="Inter, Plus Jakarta Sans, system-ui, sans-serif"
                   fontWeight="500"
                 >
                   {selectedFamily
@@ -1155,11 +1433,11 @@ export const OlfactoryWheelView: React.FC<OlfactoryWheelViewProps> = ({
 
                 <text
                   x={cx}
-                  y={cy + 54}
+                  y={cy + 58}
                   textAnchor="middle"
                   fill="#38BDF8"
-                  fontSize="12"
-                  fontFamily="sans-serif"
+                  fontSize="14"
+                  fontFamily="Inter, Plus Jakarta Sans, system-ui, sans-serif"
                   fontWeight="600"
                 >
                   Click to Show Radar Overlay ↻
@@ -1169,7 +1447,9 @@ export const OlfactoryWheelView: React.FC<OlfactoryWheelViewProps> = ({
           </svg>
 
           <p className="text-xs text-slate-400 text-center mt-3 max-w-lg font-normal leading-relaxed">
-            Click any sector to inspect its notes and calibrate your formula's Target Intent against blotter evaluation.
+            Click any sector to inspect its notes and calibrate Target Intent vs. Smelled Result.{' '}
+            <strong className="text-slate-200">Click the selected sector again</strong> to reset to{' '}
+            <span className="text-emerald-400">All 14 Families</span>.
           </p>
         </div>
 
@@ -1364,7 +1644,7 @@ export const OlfactoryWheelView: React.FC<OlfactoryWheelViewProps> = ({
                         </span>
                       </div>
                     </div>
-                    <input
+                      <input
                       type="range"
                       min={0}
                       max={10}
@@ -1380,6 +1660,226 @@ export const OlfactoryWheelView: React.FC<OlfactoryWheelViewProps> = ({
             </div>
           </div>
         </div>
+      </div>
+
+      {/* 3. SUGGESTIVE TARGET vs. RESULT FORMULATION ADVISOR & DATABASE MATERIAL RECOMMENDATIONS */}
+      <div
+        data-testid="wheel-formulation-advisor"
+        className="rounded-xl bg-[#111621] border border-slate-800/80 p-6 space-y-5"
+      >
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800/80 pb-4">
+          <div className="space-y-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <Sparkles className="w-4 h-4 text-amber-400 shrink-0" />
+              <span className="text-xs font-mono-tabular uppercase tracking-wider text-emerald-400 font-semibold">
+                Suggestive Target vs. Result Formulation Advisor
+              </span>
+              <span className="px-2 py-0.5 rounded bg-emerald-950/60 border border-emerald-600/40 text-emerald-300 font-mono-tabular text-[11px] font-semibold">
+                {gapDiagnostics.alignmentScore}% Profile Convergence
+              </span>
+            </div>
+            <h2 className="text-lg font-sans font-bold text-white">
+              Why There Is Distance & How to Close the Gap with Database Materials
+            </h2>
+            <p className="text-xs text-slate-300 leading-relaxed max-w-4xl">
+              Comparing <strong className="text-white">{activeFormula.name} ({activeFormula.activeVersionLabel})</strong> Target Brief against Smelled Evaluation across all 14 fragrance families. Click any suggested material below to implement it directly into your active formula.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {selectedFamily && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedFamilyId(null);
+                  setMacroFilter('All');
+                }}
+                className="px-3 py-1.5 rounded-md bg-slate-800 hover:bg-slate-700 text-xs font-medium text-white border border-slate-700 transition-colors"
+              >
+                Show All 14 Families
+              </button>
+            )}
+          </div>
+        </div>
+
+        {suggestionFeedback && (
+          <div
+            role="status"
+            className="p-3.5 rounded-lg bg-emerald-950/60 border border-emerald-500/50 text-emerald-200 text-xs flex items-center justify-between gap-3"
+          >
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span className="font-medium">{suggestionFeedback}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => onSelectFormula(activeFormula.id)}
+              className="px-2.5 py-1 rounded bg-emerald-600 text-white font-semibold whitespace-nowrap shrink-0"
+            >
+              Inspect in Formula Lab →
+            </button>
+          </div>
+        )}
+
+        {(() => {
+          const cardsToShow = selectedFamily
+            ? gapDiagnostics.all.filter((d) => d.fam.id === selectedFamily.id)
+            : gapDiagnostics.divergent.length > 0
+            ? gapDiagnostics.divergent.slice(0, 6)
+            : gapDiagnostics.all.slice(0, 4);
+
+          return (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+              {cardsToShow.map((diag) => {
+                const isDeficit = diag.delta < 0;
+                const isExcess = diag.delta > 0;
+
+                return (
+                  <div
+                    key={diag.fam.id}
+                    data-testid={`advisor-card-${diag.fam.id}`}
+                    className="rounded-lg bg-[#0B0E14] border border-slate-800 p-5 flex flex-col justify-between space-y-4"
+                  >
+                    <div className="space-y-3">
+                      {/* Card Header: Family Name, Target vs Result Badges, and Gap Delta */}
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800/80 pb-3">
+                        <div className="flex items-center gap-2.5">
+                          <span
+                            className="w-3.5 h-3.5 rounded-sm shrink-0"
+                            style={{ backgroundColor: diag.fam.color }}
+                          />
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <h3 className="text-sm font-bold text-white">
+                                {diag.fam.name}
+                              </h3>
+                              <span className="text-[11px] font-mono-tabular text-slate-400">
+                                ({diag.fam.macroFamily} · {diag.famWeight.pct.toFixed(1)}% in Formula)
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 font-mono-tabular text-xs">
+                          <span className="px-2 py-0.5 rounded bg-emerald-950/40 border border-emerald-700/40 text-emerald-300">
+                            Target: {diag.targetVal}/10
+                          </span>
+                          <span className="px-2 py-0.5 rounded bg-amber-950/40 border border-amber-700/40 text-amber-300">
+                            Result: {diag.resultVal}/10
+                          </span>
+                          <span
+                            className={`px-2 py-0.5 rounded font-bold flex items-center gap-1 border ${
+                              isDeficit
+                                ? 'bg-sky-500/15 border-sky-500/40 text-sky-300'
+                                : isExcess
+                                ? 'bg-rose-950/50 border-rose-500/40 text-rose-300'
+                                : 'bg-emerald-950/40 border-emerald-600/40 text-emerald-300'
+                            }`}
+                          >
+                            {isDeficit ? (
+                              <>
+                                <TrendingDown className="w-3 h-3" />
+                                <span>{diag.delta} Deficit</span>
+                              </>
+                            ) : isExcess ? (
+                              <>
+                                <TrendingUp className="w-3 h-3" />
+                                <span>+{diag.delta} Excess</span>
+                              </>
+                            ) : (
+                              <span>Aligned</span>
+                            )}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Diagnostic Explanation: Why There Is Distance & How to Close It */}
+                      <div className="space-y-2 text-xs leading-relaxed">
+                        <div className="p-3 rounded-md bg-[#111621] border border-slate-800/90 space-y-1.5">
+                          <div className="font-semibold text-white flex items-center gap-1.5">
+                            <span>Why There Is Distance:</span>
+                          </div>
+                          <p className="text-slate-300">{diag.whyDistance}</p>
+                          <div className="pt-1 text-emerald-400 font-medium">
+                            How to Become Closer to Target: {diag.actionStrategy}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Concrete Database Raw Material Suggestions */}
+                      <div className="space-y-2 pt-1">
+                        <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono-tabular">
+                          <span>
+                            AVAILABLE DATABASE MATERIALS FOR {diag.fam.name.toUpperCase()} ({diag.suggestedMaterials.length})
+                          </span>
+                          <span>RECOMMENDED ADJUSTMENT</span>
+                        </div>
+
+                        {diag.suggestedMaterials.length === 0 ? (
+                          <p className="text-xs text-slate-400 py-2">
+                            No raw materials tagged with {diag.fam.name} in current palette.
+                          </p>
+                        ) : (
+                          <div className="space-y-2">
+                            {diag.suggestedMaterials.map((mat) => (
+                              <div
+                                key={mat.id}
+                                className="p-2.5 rounded-md bg-[#111621] border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5"
+                              >
+                                <div className="space-y-0.5 min-w-0">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <button
+                                      type="button"
+                                      onClick={() => onSelectMaterial(mat.id)}
+                                      className="text-xs font-bold text-white hover:text-emerald-400 transition-colors text-left"
+                                    >
+                                      {mat.name}
+                                    </button>
+                                    <span className="px-1.5 py-0.5 rounded bg-[#0B0E14] border border-slate-800 text-[10px] font-mono-tabular text-slate-300">
+                                      {mat.volatility} Note
+                                    </span>
+                                    <span className="text-[10px] font-mono-tabular text-emerald-400">
+                                      Impact {mat.intensity || 7}/10
+                                    </span>
+                                  </div>
+                                  <p className="text-[11px] text-slate-400 truncate max-w-md">
+                                    {mat.facets.slice(0, 4).join(' · ')} — {mat.descriptiveNotes}
+                                  </p>
+                                </div>
+
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <button
+                                    type="button"
+                                    data-testid={`apply-suggestion-${diag.fam.id}-${mat.id}`}
+                                    onClick={() =>
+                                      handleApplySuggestionToFormula(
+                                        mat,
+                                        diag.recommendedPctDelta,
+                                        diag.fam.name
+                                      )
+                                    }
+                                    className="px-2.5 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors whitespace-nowrap flex items-center gap-1"
+                                  >
+                                    <Plus className="w-3.5 h-3.5" />
+                                    <span>
+                                      {diag.recommendedPctDelta >= 0
+                                        ? `Add +${diag.recommendedPctDelta}% to Formula`
+                                        : `Reduce ${diag.recommendedPctDelta}% in Formula`}
+                                    </span>
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()}
       </div>
     </div>
   );

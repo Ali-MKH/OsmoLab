@@ -11,7 +11,12 @@ import {
   ScentMemoryRecord,
   SensoryEvaluation,
 } from '../domain/types';
-import { roundDecimal } from '../domain/formula-engine';
+import {
+  roundDecimal,
+  computeFormulaFacetRadarComparison,
+  getMaterialFacetAffinity,
+  RADAR_CORE_FACETS,
+} from '../domain/formula-engine';
 import {
   CurrencyCode,
   CurrencySettings,
@@ -32,6 +37,18 @@ import {
   LogOut,
   RefreshCw,
   Coins,
+  Compass,
+  Target,
+  TrendingUp,
+  TrendingDown,
+  Plus,
+  ArrowRight,
+  CheckCircle2,
+  AlertTriangle,
+  Layers,
+  FlaskConical,
+  Filter,
+  SlidersHorizontal,
 } from 'lucide-react';
 
 interface MentorViewProps {
@@ -40,6 +57,11 @@ interface MentorViewProps {
   inventoryLots: InventoryLot[];
   evaluations: SensoryEvaluation[];
   authHeaders: Record<string, string>;
+  accords?: AccordDefinition[];
+  onUpdateFormulaItems?: (items: FormulaLineItem[]) => void;
+  onNavigateToWheel?: () => void;
+  onInspectMaterial?: (id: number) => void;
+  onOpenFormulaLab?: () => void;
   onCreateExperimentalBranch: (
     branchLabel: string,
     branchNotes: string,
@@ -49,9 +71,15 @@ interface MentorViewProps {
 
 export const OlfactoryMentorView: React.FC<MentorViewProps> = ({
   activeFormula,
+  materials,
   inventoryLots,
   evaluations,
+  accords = [],
   authHeaders,
+  onUpdateFormulaItems,
+  onNavigateToWheel,
+  onInspectMaterial,
+  onOpenFormulaLab,
   onCreateExperimentalBranch,
 }) => {
   const currentVersion =
@@ -65,6 +93,285 @@ export const OlfactoryMentorView: React.FC<MentorViewProps> = ({
   const [prioritizeInventory, setPrioritizeInventory] = useState(true);
   const [loading, setLoading] = useState(false);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [facetFilter, setFacetFilter] = useState<'all' | 'under' | 'over' | 'on'>('all');
+
+  const targetFacets = activeFormula.targetFacets || {
+    Green: 7,
+    Woody: 6,
+    Floral: 5,
+    Citrus: 4,
+  };
+
+  // Compute Improvement Insights: compare active formula composition against Olfactory Wheel target facets
+  const improvementInsights = React.useMemo(() => {
+    const items = currentVersion?.items || [];
+    const totalGrams = items.reduce((s, it) => s + it.quantityGrams, 0) || 100;
+
+    const radarComparison = computeFormulaFacetRadarComparison(
+      items,
+      materials,
+      accords,
+      targetFacets,
+      { includeAllCoreFacets: true, tolerance: 1.0 }
+    );
+
+    const lotMap = new Map<number, number>();
+    inventoryLots.forEach((l) => {
+      lotMap.set(l.materialId, (lotMap.get(l.materialId) || 0) + l.quantityRemainingGrams);
+    });
+
+    const formulaMaterialMap = new Map<number, FormulaLineItem>();
+    items.forEach((it) => {
+      if (it.materialId) formulaMaterialMap.set(it.materialId, it);
+    });
+
+    const insights = radarComparison.axes.map((axis) => {
+      const isUnder = axis.delta < -1.0;
+      const isOver = axis.delta > 1.2;
+      const isOn = !isUnder && !isOver;
+
+      const candidateMaterials = materials
+        .map((mat) => {
+          const affinity = getMaterialFacetAffinity(mat, axis.facet);
+          const inFormula = formulaMaterialMap.has(mat.id);
+          const formulaItem = formulaMaterialMap.get(mat.id);
+          const stockGrams = lotMap.get(mat.id) ?? 0;
+          return {
+            material: mat,
+            affinity,
+            inFormula,
+            currentPercentage: formulaItem ? formulaItem.percentage : 0,
+            currentGrams: formulaItem ? formulaItem.quantityGrams : 0,
+            stockGrams,
+          };
+        })
+        .filter((m) => m.affinity >= 0.55)
+        .sort((a, b) => {
+          if ((a.stockGrams > 0) !== (b.stockGrams > 0)) return b.stockGrams - a.stockGrams;
+          return (
+            b.affinity * (b.material.intensity || 6) -
+            a.affinity * (a.material.intensity || 6)
+          );
+        });
+
+      const suggestedActions: Array<{
+        type: 'add' | 'increase' | 'reduce';
+        material: RawMaterial;
+        recommendedDeltaPct: number;
+        fromPct: number;
+        toPct: number;
+        targetGrams: number;
+        rationale: string;
+        stockGrams: number;
+      }> = [];
+
+      if (isUnder) {
+        const topCandidates = candidateMaterials.slice(0, 2);
+        topCandidates.forEach((cand) => {
+          const gap = Math.abs(axis.delta);
+          const deltaPct = Number(Math.min(5.0, Math.max(1.2, gap * 0.75)).toFixed(1));
+          const fromPct = cand.currentPercentage;
+          const toPct = Number((fromPct + deltaPct).toFixed(1));
+          const deltaGrams = Number(((deltaPct / 100) * totalGrams).toFixed(2));
+
+          suggestedActions.push({
+            type: cand.inFormula ? 'increase' : 'add',
+            material: cand.material,
+            recommendedDeltaPct: deltaPct,
+            fromPct,
+            toPct,
+            targetGrams: deltaGrams,
+            rationale: cand.inFormula
+              ? `Increase ${cand.material.name} from ${fromPct.toFixed(1)}% to ${toPct.toFixed(1)}% (+${deltaPct}%) to reinforce ${axis.facet} character.`
+              : `Add ${cand.material.volatility} note ${cand.material.name} at +${deltaPct}% (${deltaGrams}g) to introduce vibrant ${axis.facet} presence.`,
+            stockGrams: cand.stockGrams,
+          });
+        });
+      } else if (isOver) {
+        const topCont = axis.topContributors[0];
+        if (topCont) {
+          const matchingItem = items.find(
+            (i) => i.name.toLowerCase() === topCont.name.toLowerCase()
+          );
+          const matObj = matchingItem
+            ? materials.find((m) => m.id === matchingItem.materialId)
+            : null;
+          if (matchingItem && matObj) {
+            const excess = axis.delta;
+            const reducePct = Number(
+              Math.min(matchingItem.percentage * 0.45, Math.max(1.0, excess * 0.75)).toFixed(1)
+            );
+            const fromPct = matchingItem.percentage;
+            const toPct = Math.max(0.2, Number((fromPct - reducePct).toFixed(1)));
+            const deltaGrams = Number(((reducePct / 100) * totalGrams).toFixed(2));
+
+            suggestedActions.push({
+              type: 'reduce',
+              material: matObj,
+              recommendedDeltaPct: -reducePct,
+              fromPct,
+              toPct,
+              targetGrams: deltaGrams,
+              rationale: `Trim ${matObj.name} from ${fromPct.toFixed(1)}% to ${toPct.toFixed(1)}% (-${reducePct}%) to soften ${axis.facet} dominance.`,
+              stockGrams: lotMap.get(matObj.id) ?? 0,
+            });
+          }
+        }
+      }
+
+      return {
+        ...axis,
+        isUnder,
+        isOver,
+        isOn,
+        gap: Math.abs(axis.delta),
+        suggestedActions,
+        candidateMaterialsCount: candidateMaterials.length,
+      };
+    });
+
+    return {
+      radarComparison,
+      insights,
+      underTarget: insights.filter((i) => i.isUnder).sort((a, b) => b.gap - a.gap),
+      overTarget: insights.filter((i) => i.isOver).sort((a, b) => b.gap - a.gap),
+      onTarget: insights.filter((i) => i.isOn),
+    };
+  }, [currentVersion, materials, accords, targetFacets, inventoryLots]);
+
+  // Apply single material addition or adjustment directly to the active formula
+  const handleApplySingleInsight = (action: {
+    material: RawMaterial;
+    recommendedDeltaPct: number;
+    type: 'add' | 'increase' | 'reduce';
+  }) => {
+    if (!onUpdateFormulaItems || !currentVersion) return;
+    const items = [...currentVersion.items];
+    const totalGrams = items.reduce((s, it) => s + it.quantityGrams, 0) || 100;
+    const deltaGrams = Number(
+      ((Math.abs(action.recommendedDeltaPct) / 100) * totalGrams).toFixed(2)
+    );
+    const existingIdx = items.findIndex((i) => i.materialId === action.material.id);
+
+    let updated: FormulaLineItem[];
+    if (existingIdx >= 0) {
+      updated = items.map((it, idx) => {
+        if (idx !== existingIdx) return it;
+        const nextGrams =
+          action.recommendedDeltaPct > 0
+            ? Number((it.quantityGrams + deltaGrams).toFixed(2))
+            : Math.max(0.1, Number((it.quantityGrams - deltaGrams).toFixed(2)));
+        return {
+          ...it,
+          quantityGrams: nextGrams,
+          activeMaterialPercent: nextGrams * (it.dilutionPercent / 100),
+          notes: `Adjusted via Mentor Improvement Insight`,
+        };
+      });
+    } else {
+      const newLine: FormulaLineItem = {
+        id: `mentor-add-${Date.now()}-${action.material.id}`,
+        type: 'material',
+        materialId: action.material.id,
+        name: action.material.name,
+        quantityGrams: deltaGrams,
+        percentage: action.recommendedDeltaPct,
+        dilutionPercent: 100,
+        solvent: 'Neat',
+        activeMaterialPercent: deltaGrams,
+        supplier: action.material.supplier || 'Organ Palette',
+        lotNumber: `LOT-${action.material.id}-MTR`,
+        costPerGram: 0.4,
+        notes: `Added via Mentor Improvement Insight (${action.material.volatility} note)`,
+      };
+      updated = [...items, newLine];
+    }
+
+    const sumG = updated.reduce((s, it) => s + it.quantityGrams, 0);
+    const normalized = updated.map((it) => ({
+      ...it,
+      percentage: sumG > 0 ? (it.quantityGrams / sumG) * 100 : 0,
+    }));
+
+    onUpdateFormulaItems(normalized);
+    setToastMsg(
+      `${action.type === 'reduce' ? 'Reduced' : 'Added'} ${action.material.name} (${
+        action.recommendedDeltaPct > 0 ? '+' : ''
+      }${action.recommendedDeltaPct}%) in ${activeFormula.name} (${currentVersion.versionLabel})`
+    );
+    setTimeout(() => setToastMsg(null), 4000);
+  };
+
+  // Create an experimental branch applying all suggested additions and adjustments at once
+  const handleCreateAllInsightsBranch = async () => {
+    if (!currentVersion) return;
+    const items = [...currentVersion.items];
+    const totalGrams = items.reduce((s, it) => s + it.quantityGrams, 0) || 100;
+
+    const actionsToApply = [
+      ...improvementInsights.underTarget.map((i) => i.suggestedActions[0]).filter(Boolean),
+      ...improvementInsights.overTarget.map((i) => i.suggestedActions[0]).filter(Boolean),
+    ];
+
+    if (actionsToApply.length === 0) {
+      setToastMsg('All evaluated facets are already aligned with your Olfactory Wheel targets!');
+      setTimeout(() => setToastMsg(null), 3000);
+      return;
+    }
+
+    let nextItems = [...items];
+    actionsToApply.forEach((act) => {
+      const deltaGrams = Number(
+        ((Math.abs(act.recommendedDeltaPct) / 100) * totalGrams).toFixed(2)
+      );
+      const idx = nextItems.findIndex((it) => it.materialId === act.material.id);
+      if (idx >= 0) {
+        nextItems[idx] = {
+          ...nextItems[idx],
+          quantityGrams:
+            act.recommendedDeltaPct > 0
+              ? Number((nextItems[idx].quantityGrams + deltaGrams).toFixed(2))
+              : Math.max(0.1, Number((nextItems[idx].quantityGrams - deltaGrams).toFixed(2))),
+        };
+      } else {
+        nextItems.push({
+          id: `branch-ins-${Date.now()}-${act.material.id}`,
+          type: 'material',
+          materialId: act.material.id,
+          name: act.material.name,
+          quantityGrams: deltaGrams,
+          percentage: act.recommendedDeltaPct,
+          dilutionPercent: 100,
+          solvent: 'Neat',
+          activeMaterialPercent: deltaGrams,
+          supplier: act.material.supplier || 'Stock',
+          lotNumber: `LOT-${act.material.id}`,
+          costPerGram: 0.4,
+          notes: `Wheel Alignment Addition`,
+        });
+      }
+    });
+
+    const sumG = nextItems.reduce((s, it) => s + it.quantityGrams, 0);
+    const normalized = nextItems.map((it) => ({
+      ...it,
+      percentage: sumG > 0 ? (it.quantityGrams / sumG) * 100 : 0,
+    }));
+
+    const branchLabel = `${currentVersion.versionLabel}-WheelAligned`;
+    await onCreateExperimentalBranch(
+      branchLabel,
+      `Branch aligned with Olfactory Wheel targets: ${actionsToApply
+        .map((a) => `${a.material.name} (${a.recommendedDeltaPct > 0 ? '+' : ''}${a.recommendedDeltaPct}%)`)
+        .join(', ')}`,
+      normalized
+    );
+
+    setToastMsg(
+      `Created experimental branch ${branchLabel} with ${actionsToApply.length} wheel-aligned adjustments!`
+    );
+    setTimeout(() => setToastMsg(null), 4000);
+  };
 
   const [analysisResult, setAnalysisResult] = useState<{
     source: string;
@@ -260,6 +567,337 @@ export const OlfactoryMentorView: React.FC<MentorViewProps> = ({
         <span className="text-xs font-mono-tabular text-slate-400">
           Master formula is never modified automatically
         </span>
+      </div>
+
+      {/* NEW: Olfactory Wheel Improvement Insights (Target Facets vs Current Formulation) */}
+      <div
+        data-testid="mentor-improvement-insights-panel"
+        className="rounded-xl bg-[#111621] border border-slate-800 p-5 sm:p-6 space-y-5"
+      >
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-800 pb-4">
+          <div className="space-y-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="p-1.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-emerald-400">
+                <Compass className="w-4 h-4" />
+              </div>
+              <h2 className="text-base font-sans font-bold text-white">
+                Olfactory Wheel Improvement Insights
+              </h2>
+              <span
+                data-testid="mentor-wheel-alignment-badge"
+                className={`px-2.5 py-0.5 text-xs font-mono-tabular font-bold rounded-full border ${
+                  improvementInsights.radarComparison.alignmentPercent >= 80
+                    ? 'bg-emerald-950/70 border-emerald-500 text-emerald-300'
+                    : improvementInsights.radarComparison.alignmentPercent >= 65
+                    ? 'bg-amber-950/70 border-amber-500 text-amber-300'
+                    : 'bg-rose-950/70 border-rose-500 text-rose-300'
+                }`}
+              >
+                {improvementInsights.radarComparison.alignmentPercent}% Target Match
+              </span>
+            </div>
+            <p className="text-xs text-slate-300 leading-relaxed max-w-4xl">
+              Real-time psychophysical gap diagnostics comparing{' '}
+              <strong className="text-white">
+                {activeFormula.name} ({currentVersion?.versionLabel})
+              </strong>{' '}
+              current material weights against the 0–10 intensity facets configured in the{' '}
+              <strong className="text-emerald-400">Olfactory Wheel</strong>.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              data-testid="apply-all-wheel-insights-btn"
+              onClick={handleCreateAllInsightsBranch}
+              className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs rounded-md shadow-xs transition-colors flex items-center gap-1.5 whitespace-nowrap"
+            >
+              <GitBranch className="w-3.5 h-3.5" />
+              <span>Create Branch with All Improvements</span>
+            </button>
+            {onNavigateToWheel && (
+              <button
+                type="button"
+                onClick={onNavigateToWheel}
+                className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-md border border-slate-700 transition-colors flex items-center gap-1.5 whitespace-nowrap"
+              >
+                <SlidersHorizontal className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Tune in Wheel →</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* KPI Strip & Filtering Tabs */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
+          <div className="flex flex-wrap items-center gap-1.5 text-xs">
+            <button
+              type="button"
+              data-testid="insight-filter-all"
+              onClick={() => setFacetFilter('all')}
+              className={`px-3 py-1.5 rounded-md font-medium transition-colors ${
+                facetFilter === 'all'
+                  ? 'bg-slate-700 text-white'
+                  : 'bg-[#0B0E14] text-slate-400 hover:text-white border border-slate-800'
+              }`}
+            >
+              All Facets ({improvementInsights.insights.length})
+            </button>
+            <button
+              type="button"
+              data-testid="insight-filter-under"
+              onClick={() => setFacetFilter('under')}
+              className={`px-3 py-1.5 rounded-md font-medium transition-colors flex items-center gap-1.5 ${
+                facetFilter === 'under'
+                  ? 'bg-sky-600 text-white'
+                  : 'bg-[#0B0E14] text-sky-400 hover:text-white border border-slate-800'
+              }`}
+            >
+              <TrendingDown className="w-3.5 h-3.5" />
+              <span>Under-Target / Deficits ({improvementInsights.underTarget.length})</span>
+            </button>
+            <button
+              type="button"
+              data-testid="insight-filter-over"
+              onClick={() => setFacetFilter('over')}
+              className={`px-3 py-1.5 rounded-md font-medium transition-colors flex items-center gap-1.5 ${
+                facetFilter === 'over'
+                  ? 'bg-amber-600 text-white'
+                  : 'bg-[#0B0E14] text-amber-400 hover:text-white border border-slate-800'
+              }`}
+            >
+              <TrendingUp className="w-3.5 h-3.5" />
+              <span>Over-Target / Excesses ({improvementInsights.overTarget.length})</span>
+            </button>
+            <button
+              type="button"
+              data-testid="insight-filter-on"
+              onClick={() => setFacetFilter('on')}
+              className={`px-3 py-1.5 rounded-md font-medium transition-colors flex items-center gap-1.5 ${
+                facetFilter === 'on'
+                  ? 'bg-emerald-600 text-white'
+                  : 'bg-[#0B0E14] text-emerald-400 hover:text-white border border-slate-800'
+              }`}
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span>Harmonized ({improvementInsights.onTarget.length})</span>
+            </button>
+          </div>
+
+          <div className="text-[11px] font-mono-tabular text-slate-400">
+            Current Items: {currentVersion?.items.length || 0} materials in bottle
+          </div>
+        </div>
+
+        {/* Insight Cards Grid */}
+        {(() => {
+          const list =
+            facetFilter === 'under'
+              ? improvementInsights.underTarget
+              : facetFilter === 'over'
+              ? improvementInsights.overTarget
+              : facetFilter === 'on'
+              ? improvementInsights.onTarget
+              : improvementInsights.insights;
+
+          if (list.length === 0) {
+            return (
+              <div className="p-6 rounded-lg bg-[#0B0E14] border border-slate-800 text-center space-y-2">
+                <CheckCircle2 className="w-6 h-6 text-emerald-400 mx-auto" />
+                <div className="text-sm font-semibold text-white">No Facet Discrepancies Found</div>
+                <p className="text-xs text-slate-400 max-w-md mx-auto">
+                  All facets in this category are harmonized with your target olfactory profile.
+                </p>
+              </div>
+            );
+          }
+
+          return (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {list.map((item) => {
+                const isUnder = item.isUnder;
+                const isOver = item.isOver;
+                const currentPct = Math.min(100, (item.currentScore / 10) * 100);
+                const targetPct = Math.min(100, (item.targetScore / 10) * 100);
+
+                return (
+                  <div
+                    key={item.facet}
+                    data-testid={`mentor-insight-card-${item.facet.toLowerCase()}`}
+                    className="p-4 rounded-lg bg-[#0B0E14] border border-slate-800/90 hover:border-slate-700 transition-colors flex flex-col justify-between space-y-3.5 text-xs"
+                  >
+                    <div className="space-y-3">
+                      {/* Card Header */}
+                      <div className="flex items-center justify-between border-b border-slate-800/80 pb-2.5">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-sm text-white">{item.facet}</span>
+                          <span
+                            className={`px-2 py-0.5 rounded text-[10px] font-mono font-semibold uppercase ${
+                              isUnder
+                                ? 'bg-sky-500/15 text-sky-300 border border-sky-500/30'
+                                : isOver
+                                ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                                : 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                            }`}
+                          >
+                            {isUnder
+                              ? `Deficit: ${item.delta.toFixed(1)} pts`
+                              : isOver
+                              ? `Excess: +${item.delta.toFixed(1)} pts`
+                              : 'Harmonized'}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2 font-mono text-[11px]">
+                          <span className="text-emerald-400">Current: {item.currentScore.toFixed(1)}</span>
+                          <span className="text-slate-600">/</span>
+                          <span className="text-slate-300">Target: {item.targetScore.toFixed(1)}</span>
+                        </div>
+                      </div>
+
+                      {/* Visual Comparison Gauge */}
+                      <div className="space-y-1">
+                        <div className="relative h-2 w-full bg-slate-800 rounded-full overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all ${
+                              isUnder
+                                ? 'bg-sky-400'
+                                : isOver
+                                ? 'bg-amber-400'
+                                : 'bg-emerald-400'
+                            }`}
+                            style={{ width: `${currentPct}%` }}
+                          />
+                          {/* Target Tick Marker */}
+                          <div
+                            className="absolute top-0 bottom-0 w-0.5 bg-white shadow-xs z-10"
+                            style={{ left: `${targetPct}%` }}
+                            title={`Target: ${item.targetScore.toFixed(1)}`}
+                          />
+                        </div>
+                        <div className="flex justify-between text-[10px] font-mono text-slate-500">
+                          <span>0</span>
+                          <span className="text-slate-300">Target Marker: {item.targetScore.toFixed(1)}</span>
+                          <span>10</span>
+                        </div>
+                      </div>
+
+                      {/* Current Bottle Formulation Contributors */}
+                      <div className="p-2.5 rounded bg-[#111621] border border-slate-800/80 space-y-1 text-[11px]">
+                        <div className="text-slate-400 font-mono text-[10px] uppercase">
+                          Current Formula Contributors ({item.topContributors.length}):
+                        </div>
+                        {item.topContributors.length === 0 ? (
+                          <span className="text-slate-400 italic">
+                            No materials in the active formula currently contribute to {item.facet}.
+                          </span>
+                        ) : (
+                          <div className="flex flex-wrap gap-1.5">
+                            {item.topContributors.map((c, idx) => (
+                              <span
+                                key={idx}
+                                className="px-2 py-0.5 rounded bg-[#0B0E14] border border-slate-800 text-slate-200"
+                              >
+                                {c.name} ({c.sharePercent.toFixed(0)}% facet share)
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Suggested Specific Material Additions or Adjustments */}
+                      <div className="space-y-2 pt-1">
+                        <div className="text-[10px] font-mono uppercase tracking-wider text-emerald-400 font-semibold">
+                          {isUnder
+                            ? 'Recommended Material Additions to Reach Target:'
+                            : isOver
+                            ? 'Recommended Material Adjustments to Trim Excess:'
+                            : 'Formulation Status:'}
+                        </div>
+
+                        {item.suggestedActions.length === 0 ? (
+                          <p className="text-[11px] text-slate-400 leading-relaxed">
+                            {item.isOn
+                              ? `Formula presence aligns with your ${item.facet} target (${item.targetScore.toFixed(1)}/10). No adjustments required.`
+                              : `No specific single material adjustment found in active palette for ${item.facet}. Consider evaluating new palette materials.`}
+                          </p>
+                        ) : (
+                          <div className="space-y-2">
+                            {item.suggestedActions.map((act, actIdx) => (
+                              <div
+                                key={actIdx}
+                                className="p-2.5 rounded bg-[#111621] border border-slate-800/90 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5"
+                              >
+                                <div className="space-y-1 min-w-0">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <button
+                                      type="button"
+                                      onClick={() => onInspectMaterial?.(act.material.id)}
+                                      className="font-bold text-white hover:text-emerald-400 transition-colors text-left"
+                                    >
+                                      {act.material.name}
+                                    </button>
+                                    <span className="px-1.5 py-0.5 rounded bg-[#0B0E14] border border-slate-800 text-[10px] font-mono text-slate-300">
+                                      {act.material.volatility}
+                                    </span>
+                                    <span
+                                      className={`text-[10px] font-mono font-bold ${
+                                        act.recommendedDeltaPct > 0
+                                          ? 'text-emerald-400'
+                                          : 'text-amber-400'
+                                      }`}
+                                    >
+                                      {act.recommendedDeltaPct > 0 ? '+' : ''}
+                                      {act.recommendedDeltaPct}% ({act.fromPct.toFixed(1)}% → {act.toPct.toFixed(1)}%)
+                                    </span>
+                                  </div>
+                                  <p className="text-[11px] text-slate-300 leading-relaxed">
+                                    {act.rationale}
+                                  </p>
+                                  {act.stockGrams > 0 ? (
+                                    <div className="text-[10px] font-mono text-emerald-400/90">
+                                      ✓ In Stock: {act.stockGrams.toFixed(1)} g available in organ inventory
+                                    </div>
+                                  ) : (
+                                    <div className="text-[10px] font-mono text-slate-400">
+                                      Atelier Raw Material Palette
+                                    </div>
+                                  )}
+                                </div>
+
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  <button
+                                    type="button"
+                                    data-testid={`apply-insight-${item.facet.toLowerCase()}-${act.material.id}`}
+                                    onClick={() => handleApplySingleInsight(act)}
+                                    className={`px-2.5 py-1.5 rounded text-white text-xs font-semibold transition-colors flex items-center gap-1 whitespace-nowrap shadow-xs ${
+                                      act.recommendedDeltaPct > 0
+                                        ? 'bg-emerald-600 hover:bg-emerald-500'
+                                        : 'bg-amber-600 hover:bg-amber-500'
+                                    }`}
+                                  >
+                                    <Plus className="w-3.5 h-3.5" />
+                                    <span>
+                                      {act.type === 'add'
+                                        ? `Add +${act.recommendedDeltaPct}%`
+                                        : act.type === 'increase'
+                                        ? `Increase +${act.recommendedDeltaPct}%`
+                                        : `Trim ${act.recommendedDeltaPct}%`}
+                                    </span>
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()}
       </div>
 
       {/* Mentor Consultation Form */}

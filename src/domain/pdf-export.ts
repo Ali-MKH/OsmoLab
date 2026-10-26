@@ -325,7 +325,9 @@ export function generateFormulaPDF({
 
   // Matching sensory evaluations for this formula / version
   const matchingEvals = evaluations.filter(
-    (ev) => ev.formulaId === formula.id && (!ev.versionLabel || ev.versionLabel === version.versionLabel)
+    (ev) =>
+      ev.formulaId === formula.id &&
+      (!ev.formulaVersionLabel || ev.formulaVersionLabel === version.versionLabel)
   );
 
   if (matchingEvals.length > 0) {
@@ -343,7 +345,7 @@ export function generateFormulaPDF({
       doc.setFontSize(8);
       doc.setTextColor(180, 83, 9);
       doc.text(
-        `BLOTTER EVALUATION RECORD (${ev.evaluationDate || 'Recent'} · Evaluator: ${ev.evaluator || 'Perfumer'})`,
+        `BLOTTER EVALUATION RECORD (${ev.createdAt || 'Recent'} · Checkpoint: ${ev.checkpoint || 'Evaluation'} · Batch: ${ev.batchCode || 'Lab Trial'})`,
         margin + 10,
         currentY + 14
       );
@@ -351,17 +353,15 @@ export function generateFormulaPDF({
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(7.5);
       doc.setTextColor(51, 65, 85);
-      const metricsText = `Overall Impression: ${ev.overallImpression || 'Balanced harmonized profile'}  ·  Diffusion: ${ev.diffusionScore || 7}/10  ·  Longevity: ${ev.longevityHours || 10}h  ·  Sillage: ${ev.sillageRating || 'Moderate'}`;
+      const metricsText = `Overall Score: ${ev.overallScore || 8}/10  ·  Diffusion: ${ev.scores?.diffusion ?? 7}/10  ·  Longevity: ${ev.scores?.longevity ?? 8}/10  ·  Heart: ${ev.scores?.heart ?? 7}/10`;
       doc.text(metricsText, margin + 10, currentY + 26);
 
-      if (ev.drydownProgression?.initial || ev.drydownProgression?.drydown4h) {
-        const drydownText = `Drydown Progression: [Initial: ${ev.drydownProgression?.initial || 'Fresh opening'}]  →  [4h: ${ev.drydownProgression?.drydown4h || 'Rich heart'}]  →  [24h: ${ev.drydownProgression?.drydown24h || 'Clean base'}]`;
-        const splitDry = doc.splitTextToSize(drydownText, pageWidth - margin * 2 - 20);
-        doc.text(splitDry, margin + 10, currentY + 38);
-      }
+      const drydownText = `Sensory Notes: [Opening: ${ev.openingNotes || 'Bright'}]  →  [Heart: ${ev.heartNotes || 'Harmonized'}]  →  [Drydown: ${ev.drydownNotes || 'Substantive'}]`;
+      const splitDry = doc.splitTextToSize(drydownText, pageWidth - margin * 2 - 20);
+      doc.text(splitDry, margin + 10, currentY + 38);
 
-      if (ev.sensoryNotes) {
-        const sensorySnippet = `Sensory Notes: ${ev.sensoryNotes}`;
+      if (ev.voiceTranscript) {
+        const sensorySnippet = `Transcript: ${ev.voiceTranscript}`;
         const splitSensory = doc.splitTextToSize(sensorySnippet, pageWidth - margin * 2 - 20);
         doc.text(splitSensory, margin + 10, currentY + 49);
       }

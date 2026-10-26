@@ -414,6 +414,38 @@ test('Safety monitor resolves category-specific IFRA thresholds from categoryLim
   assert.equal(bergamotCat5A.badgeLabel, 'Safety Risk');
   assert.equal(bergamotCat5A.maxAllowedPercentInFinalProduct, 1.2);
 });
+test('Improvement Insight engine detects under-target deficits and identifies high-affinity material additions', () => {
+  const v5Items = SEED_FORMULAS[0].versions[2].items;
+  // Set an intentional deficit: Floral target 9 (Hedione only provides ~5 in current formula)
+  const targets = {
+    Green: 7,
+    Woody: 6,
+    Floral: 9,
+    Citrus: 4,
+  };
 
+  const radar = computeFormulaFacetRadarComparison(
+    v5Items,
+    SEED_MATERIALS,
+    SEED_ACCORDS,
+    targets,
+    { includeAllCoreFacets: true, tolerance: 1.0 }
+  );
 
+  const floralAxis = radar.axes.find((a) => a.facet === 'Floral');
+  assert.ok(floralAxis, 'Floral axis should be evaluated');
+  assert.ok(floralAxis.delta < -1.0, 'Floral should be flagged as under-target deficit');
+
+  // Hedione in SEED_MATERIALS should have high affinity to Floral facet
+  const hedione = SEED_MATERIALS.find((m) => m.name === 'Hedione')!;
+  assert.ok(hedione, 'Hedione should exist in SEED_MATERIALS');
+  const floralAffinity = getMaterialFacetAffinity(hedione, 'Floral');
+  assert.ok(floralAffinity >= 0.7, 'Hedione should have high Floral affinity');
+
+  // Ambroxan in SEED_MATERIALS should have high affinity to Amber facet
+  const ambroxan = SEED_MATERIALS.find((m) => m.name === 'Ambroxan')!;
+  assert.ok(ambroxan, 'Ambroxan should exist in SEED_MATERIALS');
+  const amberAffinity = getMaterialFacetAffinity(ambroxan, 'Amber');
+  assert.ok(amberAffinity >= 0.7, 'Ambroxan should have high Amber affinity');
+});
 
